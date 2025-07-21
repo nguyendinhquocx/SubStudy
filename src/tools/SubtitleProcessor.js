@@ -49,6 +49,10 @@ export class SubtitleProcessor {
                                 <i data-lucide="printer"></i>
                                 Print PDF
                             </button>
+                            <button class="btn-secondary" id="excel-btn" disabled>
+                                <i data-lucide="file-spreadsheet"></i>
+                                Export Excel
+                            </button>
                             <button class="btn-secondary" id="clear-btn" disabled>
                                 <i data-lucide="trash-2"></i>
                                 Clear
@@ -112,8 +116,8 @@ export class SubtitleProcessor {
                 
                 <div class="setting-group checkbox-group">
                     <label>
-                        <input type="checkbox" id="remove-extra-spaces" ${config.removeExtraSpaces === true ? 'checked' : ''}>
-                        Remove extra blank lines
+                        <input type="checkbox" id="force-dual-column">
+                        Force dual-column Excel export
                     </label>
                 </div>
                 
@@ -167,14 +171,8 @@ export class SubtitleProcessor {
             this.config.set('subtitle.showTimestampsInPDF', e.target.checked);
         });
 
-        document.getElementById('remove-extra-spaces').addEventListener('change', (e) => {
-            this.config.set('subtitle.removeExtraSpaces', e.target.checked);
-            // Reprocess content if file is loaded
-            if (this.originalContent) {
-                this.processedContent = this.processSubtitleContent(this.originalContent);
-                this.processedText = this.processedContent;
-                this.updateOutput();
-            }
+        document.getElementById('force-dual-column').addEventListener('change', (e) => {
+            this.config.set('subtitle.forceDualColumn', e.target.checked);
         });
 
         document.getElementById('remove-timestamps').addEventListener('change', (e) => {
@@ -191,6 +189,7 @@ export class SubtitleProcessor {
         document.getElementById('copy-btn').addEventListener('click', () => this.copyToClipboard());
         document.getElementById('download-btn').addEventListener('click', () => this.downloadTXT());
         document.getElementById('pdf-btn').addEventListener('click', () => this.printPDF());  // Changed method name
+        document.getElementById('excel-btn').addEventListener('click', () => this.exportExcel());
         document.getElementById('clear-btn').addEventListener('click', () => this.clearContent());  // Changed method name
     }
 
@@ -230,7 +229,6 @@ export class SubtitleProcessor {
     processSubtitleContent(content) {
         // Get current settings
         const config = this.config.get('subtitle') || {};
-        const removeExtraSpaces = config.removeExtraSpaces === true;
         const removeTimestamps = config.removeTimestamps === true;
         
         // Split content into lines and clean
@@ -286,13 +284,8 @@ export class SubtitleProcessor {
             }).join('\n\n'); // Double newline between blocks
         }
         
-        // Remove extra spaces if enabled
-        if (removeExtraSpaces) {
-            // Replace multiple consecutive newlines with single newlines
-            result = result.replace(/\n\s*\n\s*\n/g, '\n\n');
-            // Remove leading/trailing whitespace
-            result = result.trim();
-        }
+        // Clean up result
+        result = result.trim();
         
         return result;
     }
@@ -333,6 +326,7 @@ export class SubtitleProcessor {
         document.getElementById('copy-btn').disabled = false;
         document.getElementById('download-btn').disabled = false;
         document.getElementById('pdf-btn').disabled = false;
+        document.getElementById('excel-btn').disabled = false;
         document.getElementById('clear-btn').disabled = false;
     }
 
@@ -340,6 +334,7 @@ export class SubtitleProcessor {
         document.getElementById('copy-btn').disabled = true;
         document.getElementById('download-btn').disabled = true;
         document.getElementById('pdf-btn').disabled = true;
+        document.getElementById('excel-btn').disabled = true;
         document.getElementById('clear-btn').disabled = true;
     }
 
@@ -600,6 +595,223 @@ export class SubtitleProcessor {
             return `${name}_processed${extension}`;
         }
         return `subtitle_processed_${new Date().toISOString().slice(0, 10)}${extension}`;
+    }
+
+    async exportExcel() {
+        if (!this.processedContent) {
+            alert('Không có nội dung để xuất. Vui lòng tải lên và xử lý file phụ đề trước.');
+            return;
+        }
+
+        try {
+            // Kiểm tra checkbox force dual column
+            const forceDualColumn = document.getElementById('force-dual-column').checked;
+            
+            // Phân tích nội dung để xác định loại phụ đề
+            const lines = this.processedContent.split('\n').filter(line => line.trim() !== '');
+            const data = this.analyzeSubtitleStructure(lines);
+            
+            // Tạo workbook và worksheet
+            const workbook = new ExcelJS.Workbook();
+            const worksheet = workbook.addWorksheet('Subtitles');
+            
+            // Quyết định format dựa trên thuật toán và checkbox
+            const shouldUseDualColumn = forceDualColumn || data.isDualLanguage;
+            
+            if (shouldUseDualColumn) {
+                // Phụ đề kép: Cột A = ngôn ngữ 1, Cột B = ngôn ngữ 2
+                worksheet.columns = [
+                    { header: 'Language 1', key: 'lang1', width: 50 },
+                    { header: 'Language 2', key: 'lang2', width: 50 }
+                ];
+                
+                if (forceDualColumn && !data.isDualLanguage) {
+                    // Nếu force dual column nhưng không phải dual language, chia đôi dòng
+                    for (let i = 0; i < lines.length; i += 2) {
+                        const line1 = lines[i] || '';
+                        const line2 = lines[i + 1] || '';
+                        worksheet.addRow({
+                            lang1: line1,
+                            lang2: line2
+                        });
+                    }
+                } else {
+                    // Sử dụng kết quả phân tích
+                    data.pairs.forEach(pair => {
+                        worksheet.addRow({
+                            lang1: pair.lang1,
+                            lang2: pair.lang2
+                        });
+                    });
+                }
+            } else {
+                // Phụ đề đơn: Chỉ cột A
+                worksheet.columns = [
+                    { header: 'Subtitle', key: 'subtitle', width: 80 }
+                ];
+                
+                data.lines.forEach(line => {
+                    worksheet.addRow({ subtitle: line });
+                });
+            }
+            
+            // Định dạng header
+            worksheet.getRow(1).font = { bold: true };
+            worksheet.getRow(1).fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFE0E0E0' }
+            };
+            
+            // Tạo buffer và download
+            const buffer = await workbook.xlsx.writeBuffer();
+            const blob = new Blob([buffer], { 
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+            });
+            
+            const filename = this.getDownloadFilename('.xlsx');
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            
+        } catch (error) {
+            console.error('Excel export failed:', error);
+            alert('Xuất Excel thất bại. Vui lòng thử lại.');
+        }
+    }
+    
+    analyzeSubtitleStructure(lines) {
+        // Phân tích cấu trúc để xác định phụ đề đơn hay kép
+        const pairs = [];
+        const singleLines = [];
+        let isDualLanguage = false;
+        
+        // Kiểm tra pattern: dòng chẵn và dòng lẻ có thể là 2 ngôn ngữ khác nhau
+        if (lines.length >= 4) {
+            let consecutivePairs = 0;
+            let languagePatternScore = 0;
+            
+            for (let i = 0; i < lines.length - 1; i += 2) {
+                const line1 = lines[i]?.trim();
+                const line2 = lines[i + 1]?.trim();
+                
+                if (line1 && line2) {
+                    // Kiểm tra độ dài tương đương
+                    const lengthRatio = Math.min(line1.length, line2.length) / Math.max(line1.length, line2.length);
+                    
+                    // Kiểm tra pattern ngôn ngữ khác nhau
+                    const isLang1English = this.isEnglishText(line1);
+                    const isLang2English = this.isEnglishText(line2);
+                    const isLang1Vietnamese = this.isVietnameseText(line1);
+                    const isLang2Vietnamese = this.isVietnameseText(line2);
+                    
+                    // Tính điểm pattern ngôn ngữ
+                    if ((isLang1English && isLang2Vietnamese) || (isLang1Vietnamese && isLang2English)) {
+                        languagePatternScore += 2;
+                    } else if (isLang1English !== isLang2English || isLang1Vietnamese !== isLang2Vietnamese) {
+                        languagePatternScore += 1;
+                    }
+                    
+                    // Kiểm tra độ tương đồng nội dung (không nên quá giống nhau)
+                    const similarity = this.calculateSimilarity(line1, line2);
+                    
+                    // Điều kiện để coi là cặp phụ đề kép
+                    if (lengthRatio > 0.2 && similarity < 0.9) {
+                        consecutivePairs++;
+                        pairs.push({ lang1: line1, lang2: line2 });
+                    } else {
+                        // Không break ngay, cho phép một vài cặp không khớp
+                        if (consecutivePairs > 0) {
+                            pairs.push({ lang1: line1, lang2: line2 });
+                        }
+                    }
+                }
+            }
+            
+            // Quyết định dựa trên nhiều yếu tố
+            const pairRatio = consecutivePairs / (lines.length / 2);
+            const languageScore = languagePatternScore / (lines.length / 2);
+            
+            // Nếu có ít nhất 50% cặp hợp lệ HOẶC điểm ngôn ngữ cao
+            if ((consecutivePairs >= 2 && pairRatio >= 0.5) || languageScore >= 1.0) {
+                isDualLanguage = true;
+                
+                // Đảm bảo tất cả dòng đều được ghép cặp
+                pairs.length = 0; // Clear và rebuild
+                for (let i = 0; i < lines.length - 1; i += 2) {
+                    const line1 = lines[i]?.trim() || '';
+                    const line2 = lines[i + 1]?.trim() || '';
+                    pairs.push({ lang1: line1, lang2: line2 });
+                }
+                
+                // Nếu số dòng lẻ, thêm dòng cuối vào cặp cuối
+                if (lines.length % 2 === 1) {
+                    const lastLine = lines[lines.length - 1]?.trim() || '';
+                    if (pairs.length > 0) {
+                        pairs[pairs.length - 1].lang2 += (pairs[pairs.length - 1].lang2 ? ' ' : '') + lastLine;
+                    } else {
+                        pairs.push({ lang1: lastLine, lang2: '' });
+                    }
+                }
+            }
+        }
+        
+        if (!isDualLanguage) {
+            // Phụ đề đơn: mỗi dòng là một câu
+            lines.forEach(line => {
+                if (line.trim()) {
+                    singleLines.push(line.trim());
+                }
+            });
+        }
+        
+        return {
+            isDualLanguage,
+            pairs: isDualLanguage ? pairs : [],
+            lines: isDualLanguage ? [] : singleLines
+        };
+    }
+    
+    calculateSimilarity(str1, str2) {
+        // Tính độ tương đồng đơn giản dựa trên ký tự chung
+        const set1 = new Set(str1.toLowerCase().split(''));
+        const set2 = new Set(str2.toLowerCase().split(''));
+        const intersection = new Set([...set1].filter(x => set2.has(x)));
+        const union = new Set([...set1, ...set2]);
+        return intersection.size / union.size;
+    }
+
+    isEnglishText(text) {
+        // Kiểm tra xem văn bản có phải tiếng Anh không
+        // Dựa trên tỷ lệ ký tự Latin và từ tiếng Anh phổ biến
+        const latinChars = text.match(/[a-zA-Z]/g) || [];
+        const totalChars = text.replace(/\s/g, '').length;
+        const latinRatio = latinChars.length / Math.max(totalChars, 1);
+        
+        // Kiểm tra một số từ tiếng Anh phổ biến
+        const englishWords = /\b(the|and|you|that|was|for|are|with|his|they|this|have|from|one|had|but|not|what|all|were|we|when|your|can|said|there|each|which|she|do|how|their|if|will|up|other|about|out|many|then|them|these|so|some|her|would|make|like|into|him|has|two|more|very|what|know|just|first|get|over|think|also|back|after|use|two|our|work|life|only|new|way|may|say|come|its|because|when|much|before|here|through|should|never|where|being|now|made|between|under|came|both|last|must|while|same|might|still|such|against|why|without|during|before|around|something|take|every|little|world|great|old|year|off|come|since|could|them|right|big|each|different|following|came|three|state|never|become|between|high|really|something|most|another|much|family|own|out|leave|put|old|while|mean|on|keep|student|why|let|great|same|big|group|begin|seem|country|help|talk|where|turn|problem|every|start|hand|might|american|show|part|about|against|place|over|such|again|few|case|most|week|company|where|system|each|right|program|hear|so|question|during|work|play|government|run|small|number|off|always|move|like|night|live|mr|point|believe|hold|today|bring|happen|next|without|before|large|all|million|must|home|under|water|room|write|mother|area|national|money|story|young|fact|month|different|lot|right|study|book|eye|job|word|though|business|issue|side|kind|four|head|far|black|long|both|little|house|yes|after|since|long|provide|service|around|friend|important|father|sit|away|until|power|hour|game|often|yet|line|political|end|among|ever|stand|bad|lose|however|member|pay|law|meet|car|city|almost|include|continue|set|later|community|much|name|five|once|white|least|president|learn|real|change|team|minute|best|several|idea|kid|body|information|nothing|ago|right|lead|social|understand|whether|back|watch|together|follow|around|parent|only|stop|face|anything|create|public|already|speak|others|read|level|allow|add|office|spend|door|health|person|art|sure|such|war|history|party|within|grow|result|open|morning|walk|reason|low|win|research|girl|guy|early|food|before|moment|himself|air|teacher|force|offer)\b/gi;
+        const englishMatches = text.match(englishWords) || [];
+        
+        return latinRatio > 0.7 && englishMatches.length > 0;
+    }
+
+    isVietnameseText(text) {
+        // Kiểm tra xem văn bản có phải tiếng Việt không
+        // Dựa trên ký tự có dấu tiếng Việt và từ tiếng Việt phổ biến
+        const vietnameseChars = text.match(/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/gi) || [];
+        const totalChars = text.replace(/\s/g, '').length;
+        const vietnameseRatio = vietnameseChars.length / Math.max(totalChars, 1);
+        
+        // Kiểm tra một số từ tiếng Việt phổ biến
+        const vietnameseWords = /\b(và|của|có|là|được|trong|với|để|từ|một|này|đó|những|các|cho|về|như|khi|đã|sẽ|bạn|tôi|chúng|họ|nó|mà|hay|hoặc|nhưng|nếu|thì|vì|do|theo|trên|dưới|giữa|bên|cạnh|gần|xa|lớn|nhỏ|tốt|xấu|mới|cũ|nhiều|ít|rất|khá|hơn|nhất|cũng|chỉ|đều|luôn|thường|đôi|khi|lúc|ngày|tháng|năm|giờ|phút|giây|người|thế|giới|việt|nam|hà|nội|sài|gòn|thành|phố|quốc|gia|chính|phủ|công|ty|trường|học|sinh|viên|giáo|viên|bác|sĩ|kỹ|sư|công|nhân|nông|dân)\b/gi;
+        const vietnameseMatches = text.match(vietnameseWords) || [];
+        
+        return vietnameseRatio > 0.1 || vietnameseMatches.length > 0;
     }
 
     clearContent() {
