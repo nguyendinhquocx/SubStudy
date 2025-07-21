@@ -64,7 +64,7 @@ export class SubtitleProcessor {
                 <div class="settings-section">
                     <button class="settings-toggle" id="settings-toggle">
                         <i data-lucide="settings"></i>
-                        PDF Settings
+                        Processing Settings
                     </button>
                     <div class="settings-panel" id="settings-panel" style="display: none;">
                         ${this.renderPDFSettings()}
@@ -112,6 +112,20 @@ export class SubtitleProcessor {
                 
                 <div class="setting-group checkbox-group">
                     <label>
+                        <input type="checkbox" id="remove-extra-spaces" ${config.removeExtraSpaces === true ? 'checked' : ''}>
+                        Remove extra blank lines
+                    </label>
+                </div>
+                
+                <div class="setting-group checkbox-group">
+                    <label>
+                        <input type="checkbox" id="remove-timestamps" ${config.removeTimestamps === true ? 'checked' : ''}>
+                        Remove timestamps (text only)
+                    </label>
+                </div>
+                
+                <div class="setting-group checkbox-group">
+                    <label>
                         <input type="checkbox" id="show-timestamps" ${config.showTimestampsInPDF !== false ? 'checked' : ''}>
                         Show timestamps in PDF
                     </label>
@@ -151,6 +165,26 @@ export class SubtitleProcessor {
 
         document.getElementById('show-timestamps').addEventListener('change', (e) => {
             this.config.set('subtitle.showTimestampsInPDF', e.target.checked);
+        });
+
+        document.getElementById('remove-extra-spaces').addEventListener('change', (e) => {
+            this.config.set('subtitle.removeExtraSpaces', e.target.checked);
+            // Reprocess content if file is loaded
+            if (this.originalContent) {
+                this.processedContent = this.processSubtitleContent(this.originalContent);
+                this.processedText = this.processedContent;
+                this.updateOutput();
+            }
+        });
+
+        document.getElementById('remove-timestamps').addEventListener('change', (e) => {
+            this.config.set('subtitle.removeTimestamps', e.target.checked);
+            // Reprocess content if file is loaded
+            if (this.originalContent) {
+                this.processedContent = this.processSubtitleContent(this.originalContent);
+                this.processedText = this.processedContent;
+                this.updateOutput();
+            }
         });
 
         // Action buttons
@@ -194,6 +228,11 @@ export class SubtitleProcessor {
 
     // Use the working subtitle processing logic from reference code
     processSubtitleContent(content) {
+        // Get current settings
+        const config = this.config.get('subtitle') || {};
+        const removeExtraSpaces = config.removeExtraSpaces === true;
+        const removeTimestamps = config.removeTimestamps === true;
+        
         // Split content into lines and clean
         const lines = content.split('\n').map(line => line.trim());
         const subtitleBlocks = [];
@@ -231,11 +270,31 @@ export class SubtitleProcessor {
             subtitleBlocks.push(currentBlock);
         }
         
-        // Format output with timestamps and proper spacing
-        return subtitleBlocks.map(block => {
-            const lines = [block.timestamp, ...block.content];
-            return lines.join('\n');
-        }).join('\n\n'); // Double newline between blocks
+        // Format output based on settings
+        let result;
+        
+        if (removeTimestamps) {
+            // Only show content, no timestamps
+            result = subtitleBlocks.map(block => {
+                return block.content.join('\n');
+            }).join('\n\n'); // Double newline between blocks
+        } else {
+            // Show timestamps and content
+            result = subtitleBlocks.map(block => {
+                const lines = [block.timestamp, ...block.content];
+                return lines.join('\n');
+            }).join('\n\n'); // Double newline between blocks
+        }
+        
+        // Remove extra spaces if enabled
+        if (removeExtraSpaces) {
+            // Replace multiple consecutive newlines with single newlines
+            result = result.replace(/\n\s*\n\s*\n/g, '\n\n');
+            // Remove leading/trailing whitespace
+            result = result.trim();
+        }
+        
+        return result;
     }
 
     // Add the missing isTimestamp method
